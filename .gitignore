@@ -1,0 +1,18 @@
+# ignore venv
+/.venv
+# ignore model files
+/models
+
+# ignore generated transcription outputs for common media types
+*.mp3.json
+*.mp3.txt
+*.wav.json
+*.wav.txt
+*.m4a.json
+*.m4a.txt
+*.mp4.json
+*.mp4.txt
+*.flac.json
+*.flac.txt
+*.ogg.json
+*.ogg.txt
