@@ -26,8 +26,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Transcribe audio files with Whisper.")
     parser.add_argument(
         "files",
-        nargs="+",
+        nargs="*",
         help="One or more audio/video files to transcribe.",
+    )
+    parser.add_argument(
+        "--scan-dir",
+        default=None,
+        help="Scan a directory recursively for common audio/video files.",
     )
     parser.add_argument(
         "--model",
@@ -65,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Write segments to a .txt file (default: on).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-transcription even if outputs already exist.",
+    )
     return parser.parse_args()
 
 
@@ -85,9 +95,52 @@ def write_segments_txt(result: dict, output_path: str) -> None:
             f.write(f"[{i:3d}] {start:>6} - {end:<6} | {conf:6.2f} | {text}\n")
 
 
+def find_media_files(root_dir: str) -> list[str]:
+    extensions = {
+        ".mp3",
+        ".wav",
+        ".m4a",
+        ".mp4",
+        ".flac",
+        ".ogg",
+        ".webm",
+        ".aac",
+        ".wma",
+        ".mkv",
+        ".avi",
+        ".mov",
+    }
+    matches: list[str] = []
+    for base, _dirs, files in os.walk(root_dir):
+        for filename in files:
+            _, ext = os.path.splitext(filename)
+            if ext.lower() in extensions:
+                matches.append(os.path.join(base, filename))
+    return matches
+
+
 def main() -> int:
     args = parse_args()
     print(get_gpu_info())
+
+    if not args.files and not args.scan_dir:
+        print("Error: provide files and/or --scan-dir")
+        return 2
+
+    files: list[str] = []
+    if args.scan_dir:
+        if not os.path.isdir(args.scan_dir):
+            print(f"Error: scan dir not found: {args.scan_dir}")
+            return 2
+        files.extend(find_media_files(args.scan_dir))
+    files.extend(args.files)
+
+    seen: set[str] = set()
+    unique_files: list[str] = []
+    for path in files:
+        if path not in seen:
+            seen.add(path)
+            unique_files.append(path)
 
     model_path = args.model_path
     if model_path is None:
@@ -97,9 +150,18 @@ def main() -> int:
 
     model = whisper.load_model(model_path or args.model, device=args.device)
 
-    for audio_file in args.files:
+    for audio_file in unique_files:
         if not os.path.exists(audio_file):
             print(f"Skipping missing file: {audio_file}")
+            continue
+
+        output_path = build_output_path(audio_file, "json")
+        segments_path = build_output_path(audio_file, "txt")
+        outputs_exist = os.path.exists(output_path)
+        if args.segments_txt:
+            outputs_exist = outputs_exist and os.path.exists(segments_path)
+        if outputs_exist and not args.force:
+            print(f"Skipping existing transcription: {audio_file}")
             continue
 
         result = model.transcribe(
@@ -114,13 +176,11 @@ def main() -> int:
         print(f"Language: {lang} (prob: {lang_prob:.2f})")
         print("Full transcript length:", len(result.get("text", "")))
 
-        output_path = build_output_path(audio_file, "json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
         print(f"Saved {output_path}")
 
         if args.segments_txt:
-            segments_path = build_output_path(audio_file, "txt")
             write_segments_txt(result, segments_path)
             print(f"Saved {segments_path}")
 
