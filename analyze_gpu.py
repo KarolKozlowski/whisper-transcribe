@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import json
 import os
@@ -15,9 +16,10 @@ def get_gpu_info() -> str:
     return f"GPU: {name} | VRAM: {vram:.1f}GB"
 
 
-def build_output_path(audio_path: str) -> str:
+def build_output_path(audio_path: str, extension: str) -> str:
     base, _ = os.path.splitext(audio_path)
-    return f"{base}.json"
+    return f"{base}.{extension}"
+
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,7 +32,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default="large-v3",
-        help="Whisper model name or path (default: large-v3).",
+        help="Whisper model name (default: large-v3).",
+    )
+    parser.add_argument(
+        "--model-path",
+        default=None,
+        help="Explicit path to a model .pt file.",
+    )
+    parser.add_argument(
+        "--models-dir",
+        default=os.path.expanduser("~/.cache/whisper"),
+        help="Directory to look for local models (default: ~/.cache/whisper).",
     )
     parser.add_argument(
         "--device",
@@ -47,14 +59,43 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include per-word timestamps (default: off).",
     )
+    parser.add_argument(
+        "--segments-txt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write segments to a .txt file (default: on).",
+    )
     return parser.parse_args()
+
+
+def write_segments_txt(result: dict, output_path: str) -> None:
+    segments = result.get("segments", [])
+    language = result.get("language", "unknown")
+    lang_prob = result.get("language_probability", 0.0)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(f"{len(segments)} segments detected\n")
+        f.write(f"Language: {language} (prob: {lang_prob:.2f})\n\n")
+
+        for i, seg in enumerate(segments, 1):
+            start = f"{seg['start']:.1f}s"
+            end = f"{seg['end']:.1f}s"
+            text = seg.get("text", "").strip()
+            conf = seg.get("avg_logprob", 0)
+            f.write(f"[{i:3d}] {start:>6} - {end:<6} | {conf:6.2f} | {text}\n")
 
 
 def main() -> int:
     args = parse_args()
     print(get_gpu_info())
 
-    model = whisper.load_model(args.model, device=args.device)
+    model_path = args.model_path
+    if model_path is None:
+        candidate = os.path.join(args.models_dir, f"{args.model}.pt")
+        if os.path.exists(candidate):
+            model_path = candidate
+
+    model = whisper.load_model(model_path or args.model, device=args.device)
 
     for audio_file in args.files:
         if not os.path.exists(audio_file):
@@ -73,10 +114,15 @@ def main() -> int:
         print(f"Language: {lang} (prob: {lang_prob:.2f})")
         print("Full transcript length:", len(result.get("text", "")))
 
-        output_path = build_output_path(audio_file)
+        output_path = build_output_path(audio_file, "json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
         print(f"Saved {output_path}")
+
+        if args.segments_txt:
+            segments_path = build_output_path(audio_file, "txt")
+            write_segments_txt(result, segments_path)
+            print(f"Saved {segments_path}")
 
         segments = result.get("segments", [])
         if segments:
