@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 
 import torch
 import whisper
@@ -79,7 +80,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def write_segments_txt(result: dict, output_path: str) -> None:
-    segments = result.get("segments", [])
+    segments = get_segments(result)
     language = result.get("language", "unknown")
     lang_prob = result.get("language_probability", 0.0)
 
@@ -88,8 +89,8 @@ def write_segments_txt(result: dict, output_path: str) -> None:
         f.write(f"Language: {language} (prob: {lang_prob:.2f})\n\n")
 
         for i, seg in enumerate(segments, 1):
-            start = f"{seg['start']:.1f}s"
-            end = f"{seg['end']:.1f}s"
+            start = f"{float(seg.get('start', 0.0)):.1f}s"
+            end = f"{float(seg.get('end', 0.0)):.1f}s"
             text = seg.get("text", "").strip()
             conf = seg.get("avg_logprob", 0)
             f.write(f"[{i:3d}] {start:>6} - {end:<6} | {conf:6.2f} | {text}\n")
@@ -117,6 +118,13 @@ def find_media_files(root_dir: str) -> list[str]:
             if ext.lower() in extensions:
                 matches.append(os.path.join(base, filename))
     return matches
+
+
+def get_segments(result: dict[str, Any]) -> list[dict[str, Any]]:
+    segments = result.get("segments", [])
+    if isinstance(segments, list):
+        return [s for s in segments if isinstance(s, dict)]
+    return []
 
 
 def main() -> int:
@@ -184,16 +192,18 @@ def main() -> int:
             write_segments_txt(result, segments_path)
             print(f"Saved {segments_path}")
 
-        segments = result.get("segments", [])
+        segments = get_segments(result)
         if segments:
-            avg_duration = sum(s["end"] - s["start"] for s in segments) / len(segments)
+            total = sum(float(s.get("end", 0.0)) - float(s.get("start", 0.0)) for s in segments)
+            avg_duration = total / len(segments)
             print(f"Segments: {len(segments)} | Avg duration: {avg_duration:.0f}s")
         else:
             print("Segments: 0")
 
-        if args.word_timestamps and segments and "words" in segments[0]:
+        words = segments[0].get("words") if segments else None
+        if args.word_timestamps and isinstance(words, list):
             print("First segment words:")
-            for word in segments[0]["words"][:10]:
+            for word in words[:10]:
                 print(
                     f"  '{word['word']}' "
                     f"[{word['start']:.1f}-{word['end']:.1f}s] "
